@@ -561,6 +561,59 @@ class Recognizer(AudioSource):
         listener_thread.start()
         return stopper
 
+    def match_keyphrase_sphinx(self, audio_data, keyphrase, kws_threshold, language = "en-US"):
+        """
+        Performs speech keyphrase matching on ``audio_data`` (an ``AudioData`` instance), using CMU Sphinx.
+
+        The recognition language is determined by ``language``, an RFC5646 language tag like ``"en-US"`` or ``"en-GB"``, defaulting to US English. Out of the box, only ``en-US`` is supported. See `Notes on using `PocketSphinx <https://github.com/Uberi/speech_recognition/blob/master/reference/pocketsphinx.rst>`__ for information about installing other languages. This document is also included under ``reference/pocketsphinx.rst``.
+
+        Raises a ``speech_recognition.UnknownValueError`` exception if the speech is unintelligible. Raises a ``speech_recognition.RequestError`` exception if there are any issues with the Sphinx installation.
+        """
+        assert isinstance(audio_data, AudioData), "`audio_data` must be audio data"
+        assert isinstance(language, str), "`language` must be a string"
+
+        # import the PocketSphinx speech recognition module
+        try:
+            from pocketsphinx import pocketsphinx
+            from sphinxbase import sphinxbase
+        except ImportError:
+            raise RequestError("missing PocketSphinx module: ensure that PocketSphinx is set up correctly.")
+        except ValueError:
+            raise RequestError("bad PocketSphinx installation detected; make sure you have PocketSphinx version 0.0.9 or better.")
+
+        language_directory = os.path.join(os.path.dirname(os.path.realpath(__file__)), "pocketsphinx-data", language)
+        if not os.path.isdir(language_directory):
+            raise RequestError("missing PocketSphinx language data directory: \"{0}\"".format(language_directory))
+        acoustic_parameters_directory = os.path.join(language_directory, "acoustic-model")
+        if not os.path.isdir(acoustic_parameters_directory):
+            raise RequestError("missing PocketSphinx language model parameters directory: \"{0}\"".format(acoustic_parameters_directory))
+        phoneme_dictionary_file = os.path.join(language_directory, "pronounciation-dictionary.dict")
+        if not os.path.isfile(phoneme_dictionary_file):
+            raise RequestError("missing PocketSphinx phoneme dictionary file: \"{0}\"".format(phoneme_dictionary_file))
+
+        # create decoder object
+        config = pocketsphinx.Decoder.default_config()
+        config.set_string("-hmm", acoustic_parameters_directory) # set the path of the hidden Markov model (HMM) parameter files
+        config.set_string("-keyphrase", keyphrase)
+        config.set_string("-kws_threshold", kws_threshold)
+        config.set_string("-dict", phoneme_dictionary_file)
+        config.set_string("-logfn", os.devnull) # disable logging (logging causes unwanted output in terminal)
+        decoder = pocketsphinx.Decoder(config)
+
+        # obtain audio data
+        raw_data = audio_data.get_raw_data(convert_rate = 16000, convert_width = 2) # the included language models require audio to be 16-bit mono 16 kHz in little-endian format
+
+        # obtain recognition results
+        decoder.start_utt() # begin utterance processing
+        decoder.process_raw(raw_data, False, True) # process audio data with recognition enabled (no_search = False), as a full utterance (full_utt = True)
+        decoder.end_utt() # stop utterance processing
+
+        # return results
+        hypothesis = decoder.hyp()
+        if hypothesis is not None: return True
+        return False
+
+
     def recognize_sphinx(self, audio_data, language = "en-US", show_all = False):
         """
         Performs speech recognition on ``audio_data`` (an ``AudioData`` instance), using CMU Sphinx.
